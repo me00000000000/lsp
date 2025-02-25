@@ -16,6 +16,8 @@
 #define COLOR_RED "\033[1;31m"
 #define COLOR_DIR "\033[1;34m"
 #define COLOR_FILE "\033[0m"
+#define COLOR_DARK_GREY "\033[90m"
+#define COLOR_GREY "\033[37m"
 
 typedef struct {
     char *name;
@@ -133,7 +135,7 @@ int main(int argc, char *argv[]) {
         if (stat(fe->fullpath, &st) < 0) {
             free(fe->name);
             free(fe);
-            continue; // Skip files we don't have permission to read
+            continue;
         }
         fe->mode = st.st_mode;
         fe->uid = st.st_uid;
@@ -188,11 +190,18 @@ int main(int argc, char *argv[]) {
         char time_str[32];
         time_ago(fe->mtime, time_str, sizeof(time_str));
 
-        printf("%-*s  %-*s  %s%-*s%s  %-*s  %s%-*s%s\n",
+        double seconds = difftime(time(NULL), fe->mtime);
+        const char *date_color = "";
+        if (seconds >= 31536000)
+            date_color = COLOR_DARK_GREY;
+        else if (seconds >= 2592000)
+            date_color = COLOR_GREY;
+
+        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  %s%-*s%s\n",
             max_perm, perms,
             max_user, usergroup,
             size_color, max_size, size_str, COLOR_RESET,
-            max_date, time_str,
+            date_color, max_date, time_str, COLOR_RESET,
             (fe->is_dir ? COLOR_DIR : COLOR_FILE), max_name, fe->name, COLOR_RESET);
         free(fe->name);
         free(fe);
