@@ -15,7 +15,7 @@
 #define COLOR_ORANGE "\033[38;5;208m"
 #define COLOR_RED "\033[1;31m"
 #define COLOR_DIR "\033[1;34m"
-#define COLOR_FILE "\033[1;37m"
+#define COLOR_FILE "\033[0m"
 
 typedef struct {
     char *name;
@@ -93,10 +93,11 @@ void time_ago(time_t mtime, char *buf, size_t bufsize) {
     } else if (seconds < 3600) {
         snprintf(buf, bufsize, "%.0fm ago", seconds / 60);
     } else if (seconds < 86400) {
-        snprintf(buf, bufsize, "%.0fh ago", seconds / 3600);
-   
-    } else if (seconds < 31536000) {
+        snprintf(buf, bufsize, "%.0fh ago", seconds / 3600);  
+    } else if (seconds < 2592000) {
         snprintf(buf, bufsize, "%.0fd ago", seconds / 86400);
+    } else if (seconds < 31536000) {
+        snprintf(buf, bufsize, "%.0fmo ago", seconds / 2592000);
     } else {
         snprintf(buf, bufsize, "%.0fy ago", seconds / 31536000);
     }
