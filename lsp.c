@@ -31,7 +31,7 @@ typedef struct {
 off_t get_directory_size(const char *path) {
     off_t total = 0;
     DIR *d = opendir(path);
-    if (!d) { perror(path); return 0; }
+    if (!d) { return 0; }
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
@@ -94,6 +94,7 @@ void time_ago(time_t mtime, char *buf, size_t bufsize) {
         snprintf(buf, bufsize, "%.0fm ago", seconds / 60);
     } else if (seconds < 86400) {
         snprintf(buf, bufsize, "%.0fh ago", seconds / 3600);
+   
     } else if (seconds < 31536000) {
         snprintf(buf, bufsize, "%.0fd ago", seconds / 86400);
     } else {
@@ -114,21 +115,25 @@ int main(int argc, char *argv[]) {
     }
 
     DIR *d = opendir(dirpath);
-    if (!d) { perror("opendir"); return EXIT_FAILURE; }
+    if (!d) { return EXIT_FAILURE; }
     size_t cap = 16, count = 0;
     FileEntry **entries = malloc(cap * sizeof(FileEntry *));
-    if (!entries) { perror("malloc"); closedir(d); return EXIT_FAILURE; }
+    if (!entries) { closedir(d); return EXIT_FAILURE; }
     struct dirent *dp;
     while ((dp = readdir(d)) != NULL) {
         if (!show_hidden && dp->d_name[0] == '.') {
             continue;
         }
         FileEntry *fe = malloc(sizeof(FileEntry));
-        if (!fe) { perror("malloc"); continue; }
+        if (!fe) { continue; }
         fe->name = strdup(dp->d_name);
         snprintf(fe->fullpath, PATH_MAX, "%s/%s", dirpath, dp->d_name);
         struct stat st;
-        if (stat(fe->fullpath, &st) < 0) { perror(fe->fullpath); free(fe->name); free(fe); continue; }
+        if (stat(fe->fullpath, &st) < 0) {
+            free(fe->name);
+            free(fe);
+            continue; // Skip files we don't have permission to read
+        }
         fe->mode = st.st_mode;
         fe->uid = st.st_uid;
         fe->gid = st.st_gid;
@@ -138,7 +143,7 @@ int main(int argc, char *argv[]) {
         if (count >= cap) {
             cap *= 2;
             FileEntry **tmp = realloc(entries, cap * sizeof(FileEntry *));
-            if (!tmp) { perror("realloc"); free(fe->name); free(fe); break; }
+            if (!tmp) { free(fe->name); free(fe); break; }
             entries = tmp;
         }
         entries[count++] = fe;
@@ -194,4 +199,3 @@ int main(int argc, char *argv[]) {
     free(entries);
     return EXIT_SUCCESS;
 }
-       
