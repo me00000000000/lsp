@@ -1,5 +1,5 @@
 make:
 	gcc lsp.c -o lsp
 install:
-	make
+	gcc lsp.c -o lsp
 	cp lsp /usr/bin/
