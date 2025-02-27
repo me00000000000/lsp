@@ -22,6 +22,7 @@
 #define COLOR_GREY "\033[37m"
 #define COLOR_SYMLINK "\033[1;36m"
 #define COLOR_YELLOW "\033[1;33m"
+#define COLOR_LINKTARGET "\033[37m"
 
 typedef struct {
     char *name;
@@ -127,38 +128,40 @@ void print_entries(FileEntry **entries, size_t count) {
     size_t max_name = 0;
     for (size_t i = 0; i < count; i++) {
         FileEntry *fe = entries[i];
-        char perms[11]; 
+        char perms[11];
         get_permission_string(fe->mode, perms);
-        int l = strlen(perms); 
+        int l = strlen(perms);
         if (l > max_perm) max_perm = l;
         struct passwd *pwd = getpwuid(fe->uid);
         struct group *grp = getgrgid(fe->gid);
         char usergroup[64];
-        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", 
+        snprintf(usergroup, sizeof(usergroup), "%s:%s", 
+                 pwd ? pwd->pw_name : "unknown", 
                  grp ? grp->gr_name : "unknown");
-        l = strlen(usergroup); 
+        l = strlen(usergroup);
         if (l > max_user) max_user = l;
-        char size_str[32]; 
+        char size_str[32];
         human_readable_size(fe->size, size_str, sizeof(size_str));
-        l = strlen(size_str); 
+        l = strlen(size_str);
         if (l > max_size) max_size = l;
-        char time_str[32]; 
+        char time_str[32];
         time_ago(fe->mtime, time_str, sizeof(time_str));
-        l = strlen(time_str); 
+        l = strlen(time_str);
         if (l > max_date) max_date = l;
-        l = strlen(fe->name); 
+        l = strlen(fe->name);
         if (l > max_name) max_name = l;
     }
     for (size_t i = 0; i < count; i++) {
         FileEntry *fe = entries[i];
-        char perms[11]; 
+        char perms[11];
         get_permission_string(fe->mode, perms);
         struct passwd *pwd = getpwuid(fe->uid);
         struct group *grp = getgrgid(fe->gid);
         char usergroup[64];
-        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", 
+        snprintf(usergroup, sizeof(usergroup), "%s:%s", 
+                 pwd ? pwd->pw_name : "unknown", 
                  grp ? grp->gr_name : "unknown");
-        char size_str[32]; 
+        char size_str[32];
         human_readable_size(fe->size, size_str, sizeof(size_str));
         const char *size_color = "";
         if (strstr(size_str, "KB") != NULL)
@@ -167,7 +170,7 @@ void print_entries(FileEntry **entries, size_t count) {
             size_color = COLOR_ORANGE;
         else if (strstr(size_str, "GB") != NULL)
             size_color = COLOR_RED;
-        char time_str[32]; 
+        char time_str[32];
         time_ago(fe->mtime, time_str, sizeof(time_str));
         double seconds = difftime(time(NULL), fe->mtime);
         const char *date_color = "";
@@ -176,12 +179,15 @@ void print_entries(FileEntry **entries, size_t count) {
         else if (seconds >= 2592000)
             date_color = COLOR_GREY;
         const char *name_color = (fe->is_symlink ? COLOR_SYMLINK : (fe->is_dir ? COLOR_DIR : COLOR_FILE));
-        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  %s%-*s%s", 
+        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  ", 
                max_perm, perms,
                max_user, usergroup,
                size_color, max_size, size_str, COLOR_RESET,
-               date_color, max_date, time_str, COLOR_RESET,
-               name_color, (int)max_name, fe->name, COLOR_RESET);
+               date_color, max_date, time_str, COLOR_RESET);
+        if (fe->is_symlink && fe->link_target)
+            printf("%s%s%s -> %s%s", name_color, fe->name, COLOR_RESET, fe->link_target, COLOR_RESET);
+        else
+            printf("%s%-*s%s", name_color, (int)max_name, fe->name, COLOR_RESET);
         if (S_ISCHR(fe->mode))
             printf("%s*%s", COLOR_RED, COLOR_RESET);
         else if (S_ISBLK(fe->mode))
