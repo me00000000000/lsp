@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
+#include <glob.h>
 
 #define COLOR_RESET "\033[0m"
 #define COLOR_GREEN "\033[1;32m"
@@ -121,20 +122,80 @@ void time_ago(time_t mtime, char *buf, size_t bufsize) {
         snprintf(buf, bufsize, "%.0fy ago", seconds / 31536000);
 }
 
-int main(int argc, char *argv[]) {
-    int show_hidden = 0;
-    const char *dirpath = ".";
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-h") == 0)
-            show_hidden = 1;
-        else
-            dirpath = argv[i];
+void print_entries(FileEntry **entries, size_t count) {
+    int max_perm = 0, max_user = 0, max_size = 0, max_date = 0;
+    size_t max_name = 0;
+    for (size_t i = 0; i < count; i++) {
+        FileEntry *fe = entries[i];
+        char perms[11]; 
+        get_permission_string(fe->mode, perms);
+        int l = strlen(perms); 
+        if (l > max_perm) max_perm = l;
+        struct passwd *pwd = getpwuid(fe->uid);
+        struct group *grp = getgrgid(fe->gid);
+        char usergroup[64];
+        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", 
+                 grp ? grp->gr_name : "unknown");
+        l = strlen(usergroup); 
+        if (l > max_user) max_user = l;
+        char size_str[32]; 
+        human_readable_size(fe->size, size_str, sizeof(size_str));
+        l = strlen(size_str); 
+        if (l > max_size) max_size = l;
+        char time_str[32]; 
+        time_ago(fe->mtime, time_str, sizeof(time_str));
+        l = strlen(time_str); 
+        if (l > max_date) max_date = l;
+        l = strlen(fe->name); 
+        if (l > max_name) max_name = l;
     }
+    for (size_t i = 0; i < count; i++) {
+        FileEntry *fe = entries[i];
+        char perms[11]; 
+        get_permission_string(fe->mode, perms);
+        struct passwd *pwd = getpwuid(fe->uid);
+        struct group *grp = getgrgid(fe->gid);
+        char usergroup[64];
+        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", 
+                 grp ? grp->gr_name : "unknown");
+        char size_str[32]; 
+        human_readable_size(fe->size, size_str, sizeof(size_str));
+        const char *size_color = "";
+        if (strstr(size_str, "KB") != NULL)
+            size_color = COLOR_GREEN;
+        else if (strstr(size_str, "MB") != NULL)
+            size_color = COLOR_ORANGE;
+        else if (strstr(size_str, "GB") != NULL)
+            size_color = COLOR_RED;
+        char time_str[32]; 
+        time_ago(fe->mtime, time_str, sizeof(time_str));
+        double seconds = difftime(time(NULL), fe->mtime);
+        const char *date_color = "";
+        if (seconds >= 31536000)
+            date_color = COLOR_DARK_GREY;
+        else if (seconds >= 2592000)
+            date_color = COLOR_GREY;
+        const char *name_color = (fe->is_symlink ? COLOR_SYMLINK : (fe->is_dir ? COLOR_DIR : COLOR_FILE));
+        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  %s%-*s%s", 
+               max_perm, perms,
+               max_user, usergroup,
+               size_color, max_size, size_str, COLOR_RESET,
+               date_color, max_date, time_str, COLOR_RESET,
+               name_color, (int)max_name, fe->name, COLOR_RESET);
+        if (S_ISCHR(fe->mode))
+            printf("%s*%s", COLOR_RED, COLOR_RESET);
+        else if (S_ISBLK(fe->mode))
+            printf("%s#%s", COLOR_YELLOW, COLOR_RESET);
+        printf("\n");
+    }
+}
+
+void process_directory(const char *dirpath, int show_hidden) {
     DIR *d = opendir(dirpath);
-    if (!d) return EXIT_FAILURE;
+    if (!d) return;
     size_t cap = 16, count = 0;
     FileEntry **entries = malloc(cap * sizeof(FileEntry *));
-    if (!entries) { closedir(d); return EXIT_FAILURE; }
+    if (!entries) { closedir(d); return; }
     struct dirent *dp;
     while ((dp = readdir(d)) != NULL) {
         if (!show_hidden && dp->d_name[0] == '.')
@@ -180,60 +241,105 @@ int main(int argc, char *argv[]) {
     }
     closedir(d);
     qsort(entries, count, sizeof(FileEntry *), cmp_entries);
-    int max_perm = 0, max_user = 0, max_size = 0, max_date = 0;
+    print_entries(entries, count);
     for (size_t i = 0; i < count; i++) {
-        FileEntry *fe = entries[i];
-        char perms[11]; get_permission_string(fe->mode, perms);
-        int l = strlen(perms); if (l > max_perm) max_perm = l;
-        struct passwd *pwd = getpwuid(fe->uid);
-        struct group *grp = getgrgid(fe->gid);
-        char usergroup[64];
-        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", grp ? grp->gr_name : "unknown");
-        l = strlen(usergroup); if (l > max_user) max_user = l;
-        char size_str[32]; human_readable_size(fe->size, size_str, sizeof(size_str));
-        l = strlen(size_str); if (l > max_size) max_size = l;
-        char time_str[32]; time_ago(fe->mtime, time_str, sizeof(time_str));
-        l = strlen(time_str); if (l > max_date) max_date = l;
-    }
-    for (size_t i = 0; i < count; i++) {
-        FileEntry *fe = entries[i];
-        char perms[11]; get_permission_string(fe->mode, perms);
-        struct passwd *pwd = getpwuid(fe->uid);
-        struct group *grp = getgrgid(fe->gid);
-        char usergroup[64];
-        snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", grp ? grp->gr_name : "unknown");
-        char size_str[32]; human_readable_size(fe->size, size_str, sizeof(size_str));
-        const char *size_color = "";
-        if (strstr(size_str, "KB") != NULL)
-            size_color = COLOR_GREEN;
-        else if (strstr(size_str, "MB") != NULL)
-            size_color = COLOR_ORANGE;
-        else if (strstr(size_str, "GB") != NULL)
-            size_color = COLOR_RED;
-        char time_str[32];
-        time_ago(fe->mtime, time_str, sizeof(time_str));
-        double seconds = difftime(time(NULL), fe->mtime);
-        const char *date_color = "";
-        if (seconds >= 31536000)
-            date_color = COLOR_DARK_GREY;
-        else if (seconds >= 2592000)
-            date_color = COLOR_GREY;
-        const char *name_color = (fe->is_symlink ? COLOR_SYMLINK : (fe->is_dir ? COLOR_DIR : COLOR_FILE));
-        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  %s%s%s", 
-            max_perm, perms,
-            max_user, usergroup,
-            size_color, max_size, size_str, COLOR_RESET,
-            date_color, max_date, time_str, COLOR_RESET,
-            name_color, fe->name, COLOR_RESET);
-        if (S_ISCHR(fe->mode))
-            printf("%s*%s", COLOR_RED, COLOR_RESET);
-        else if (S_ISBLK(fe->mode))
-            printf("%s#%s", COLOR_YELLOW, COLOR_RESET);
-        printf("\n");
-        free(fe->name);
-        if (fe->link_target) free(fe->link_target);
-        free(fe);
+        free(entries[i]->name);
+        if (entries[i]->link_target) free(entries[i]->link_target);
+        free(entries[i]);
     }
     free(entries);
+}
+
+FileEntry* create_file_entry(const char *filepath) {
+    struct stat st;
+    if (lstat(filepath, &st) < 0) return NULL;
+    FileEntry *fe = malloc(sizeof(FileEntry));
+    if (!fe) return NULL;
+    fe->name = strdup(filepath);
+    strncpy(fe->fullpath, filepath, PATH_MAX);
+    fe->mode = st.st_mode;
+    fe->uid = st.st_uid;
+    fe->gid = st.st_gid;
+    fe->mtime = st.st_mtime;
+    fe->is_dir = S_ISDIR(st.st_mode);
+    if (S_ISLNK(st.st_mode)) {
+        fe->is_symlink = 1;
+        char target[PATH_MAX];
+        ssize_t len = readlink(fe->fullpath, target, sizeof(target) - 1);
+        if (len != -1) {
+            target[len] = '\0';
+            fe->link_target = strdup(target);
+        } else {
+            fe->link_target = strdup("unreadable");
+        }
+        fe->size = st.st_size;
+    } else {
+        fe->is_symlink = 0;
+        fe->link_target = NULL;
+        fe->size = fe->is_dir ? get_directory_size(fe->fullpath) : st.st_size;
+    }
+    return fe;
+}
+
+void process_file_collect(const char *filepath, FileEntry ***files, size_t *count, size_t *cap) {
+    FileEntry *fe = create_file_entry(filepath);
+    if (!fe) return;
+    if (*count >= *cap) {
+        *cap *= 2;
+        FileEntry **tmp = realloc(*files, *cap * sizeof(FileEntry *));
+        if (!tmp) { free(fe->name); free(fe); return; }
+        *files = tmp;
+    }
+    (*files)[(*count)++] = fe;
+}
+
+void process_path(const char *path, int show_hidden, FileEntry ***file_files, size_t *file_count, size_t *file_cap) {
+    struct stat st;
+    if (lstat(path, &st) < 0) return;
+    if (S_ISDIR(st.st_mode))
+        process_directory(path, show_hidden);
+    else
+        process_file_collect(path, file_files, file_count, file_cap);
+}
+
+int main(int argc, char *argv[]) {
+    int show_hidden = 0, nonflag_count = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0)
+            show_hidden = 1;
+        else
+            nonflag_count++;
+    }
+    FileEntry **file_files = NULL;
+    size_t file_count = 0, file_cap = 16;
+    file_files = malloc(file_cap * sizeof(FileEntry *));
+    if (!file_files) return EXIT_FAILURE;
+    if (nonflag_count == 0) {
+        process_directory(".", show_hidden);
+    } else {
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "-h") == 0) continue;
+            glob_t results;
+            int ret = glob(argv[i], 0, NULL, &results);
+            if (ret != 0) {
+                process_path(argv[i], show_hidden, &file_files, &file_count, &file_cap);
+            } else {
+                for (size_t j = 0; j < results.gl_pathc; j++) {
+                    process_path(results.gl_pathv[j], show_hidden, &file_files, &file_count, &file_cap);
+                }
+            }
+            globfree(&results);
+        }
+        if (file_count > 0) {
+            qsort(file_files, file_count, sizeof(FileEntry *), cmp_entries);
+            print_entries(file_files, file_count);
+            for (size_t i = 0; i < file_count; i++) {
+                free(file_files[i]->name);
+                if (file_files[i]->link_target) free(file_files[i]->link_target);
+                free(file_files[i]);
+            }
+            free(file_files);
+        }
+    }
     return EXIT_SUCCESS;
 }
