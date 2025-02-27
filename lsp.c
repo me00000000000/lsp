@@ -196,12 +196,19 @@ void print_entries(FileEntry **entries, size_t count) {
     }
 }
 
-void process_directory(const char *dirpath, int show_hidden) {
+void process_directory(const char *dirpath, int show_hidden, int print_header) {
     DIR *d = opendir(dirpath);
     if (!d) return;
+
+    if (print_header)
+        printf("%s:\n", dirpath);
+
     size_t cap = 16, count = 0;
     FileEntry **entries = malloc(cap * sizeof(FileEntry *));
-    if (!entries) { closedir(d); return; }
+    if (!entries) { 
+        closedir(d); 
+        return; 
+    }
     struct dirent *dp;
     while ((dp = readdir(d)) != NULL) {
         if (!show_hidden && dp->d_name[0] == '.')
@@ -248,6 +255,10 @@ void process_directory(const char *dirpath, int show_hidden) {
     closedir(d);
     qsort(entries, count, sizeof(FileEntry *), cmp_entries);
     print_entries(entries, count);
+
+    if (print_header)
+        printf("\n");
+
     for (size_t i = 0; i < count; i++) {
         free(entries[i]->name);
         if (entries[i]->link_target) free(entries[i]->link_target);
@@ -299,11 +310,12 @@ void process_file_collect(const char *filepath, FileEntry ***files, size_t *coun
     (*files)[(*count)++] = fe;
 }
 
-void process_path(const char *path, int show_hidden, FileEntry ***file_files, size_t *file_count, size_t *file_cap) {
+void process_path(const char *path, int show_hidden, int print_header, 
+                  FileEntry ***file_files, size_t *file_count, size_t *file_cap) {
     struct stat st;
     if (lstat(path, &st) < 0) return;
     if (S_ISDIR(st.st_mode))
-        process_directory(path, show_hidden);
+        process_directory(path, show_hidden, print_header);
     else
         process_file_collect(path, file_files, file_count, file_cap);
 }
@@ -320,18 +332,22 @@ int main(int argc, char *argv[]) {
     size_t file_count = 0, file_cap = 16;
     file_files = malloc(file_cap * sizeof(FileEntry *));
     if (!file_files) return EXIT_FAILURE;
+
     if (nonflag_count == 0) {
-        process_directory(".", show_hidden);
+        process_directory(".", show_hidden, 0);
     } else {
+        int print_header = (nonflag_count > 1);
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "-h") == 0) continue;
             glob_t results;
             int ret = glob(argv[i], 0, NULL, &results);
             if (ret != 0) {
-                process_path(argv[i], show_hidden, &file_files, &file_count, &file_cap);
+                process_path(argv[i], show_hidden, print_header, 
+                             &file_files, &file_count, &file_cap);
             } else {
                 for (size_t j = 0; j < results.gl_pathc; j++) {
-                    process_path(results.gl_pathv[j], show_hidden, &file_files, &file_count, &file_cap);
+                    process_path(results.gl_pathv[j], show_hidden, print_header, 
+                                 &file_files, &file_count, &file_cap);
                 }
             }
             globfree(&results);
