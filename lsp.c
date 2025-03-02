@@ -187,7 +187,7 @@ void print_entries(FileEntry **entries, size_t count) {
         if (fe->is_symlink && fe->link_target)
             printf("%s%s%s -> %s%s", name_color, fe->name, COLOR_RESET, fe->link_target, COLOR_RESET);
         else
-            printf("%s%-*s%s", name_color, (int)max_name, fe->name, COLOR_RESET);
+            printf("%s%s%s", name_color, fe->name, COLOR_RESET);
         if (S_ISCHR(fe->mode))
             printf("%s*%s", COLOR_RED, COLOR_RESET);
         else if (S_ISBLK(fe->mode))
