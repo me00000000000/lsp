@@ -178,7 +178,17 @@ void print_entries(FileEntry **entries, size_t count) {
             date_color = COLOR_DARK_GREY;
         else if (seconds >= 2592000)
             date_color = COLOR_GREY;
-        const char *name_color = (fe->is_symlink ? COLOR_SYMLINK : (fe->is_dir ? COLOR_DIR : COLOR_FILE));
+        
+        const char *name_color;
+        if (fe->is_symlink)
+            name_color = COLOR_SYMLINK;
+        else if (fe->is_dir)
+            name_color = COLOR_DIR;
+        else if ((fe->mode & S_IXUSR) || (fe->mode & S_IXGRP) || (fe->mode & S_IXOTH))
+            name_color = COLOR_GREEN;
+        else
+            name_color = COLOR_FILE;
+
         printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  ", 
                max_perm, perms,
                max_user, usergroup,
