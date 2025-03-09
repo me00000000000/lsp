@@ -196,14 +196,34 @@ void print_entries(FileEntry **entries, size_t count) {
                date_color, max_date, time_str, COLOR_RESET);
         if (fe->is_symlink && fe->link_target) {
             struct stat st_target;
+            int stat_ret = stat(fe->fullpath, &st_target);
             const char *target_color = COLOR_LINKTARGET;
-            if (stat(fe->fullpath, &st_target) == 0 && S_ISDIR(st_target.st_mode)) {
-                target_color = COLOR_DIR;
+            int is_char = 0, is_block = 0;
+
+            if (stat_ret == 0) {
+                if (S_ISDIR(st_target.st_mode))
+                    target_color = COLOR_DIR;
+                else if (S_ISCHR(st_target.st_mode)) {
+                    target_color = COLOR_LINKTARGET;
+                    is_char = 1;
+                } else if (S_ISBLK(st_target.st_mode)) {
+                    target_color = COLOR_LINKTARGET;
+                    is_block = 1;
+                }
             }
-            printf("%s%s%s -> %s%s%s", name_color, fe->name, COLOR_RESET, target_color, fe->link_target, COLOR_RESET);
+
+            printf("%s%s%s -> %s%s%s", 
+                   name_color, fe->name, COLOR_RESET,
+                   target_color, fe->link_target, COLOR_RESET);
+
+            if (is_char)
+                printf("%s*%s", COLOR_RED, COLOR_RESET);
+            else if (is_block)
+                printf("%s#%s", COLOR_YELLOW, COLOR_RESET);
         } else {
             printf("%s%s%s", name_color, fe->name, COLOR_RESET);
         }
+
         if (S_ISCHR(fe->mode))
             printf("%s*%s", COLOR_RED, COLOR_RESET);
         else if (S_ISBLK(fe->mode))
