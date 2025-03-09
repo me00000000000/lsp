@@ -194,10 +194,16 @@ void print_entries(FileEntry **entries, size_t count) {
                max_user, usergroup,
                size_color, max_size, size_str, COLOR_RESET,
                date_color, max_date, time_str, COLOR_RESET);
-        if (fe->is_symlink && fe->link_target)
-            printf("%s%s%s -> %s%s", name_color, fe->name, COLOR_RESET, fe->link_target, COLOR_RESET);
-        else
+        if (fe->is_symlink && fe->link_target) {
+            struct stat st_target;
+            const char *target_color = COLOR_LINKTARGET;
+            if (stat(fe->fullpath, &st_target) == 0 && S_ISDIR(st_target.st_mode)) {
+                target_color = COLOR_DIR;
+            }
+            printf("%s%s%s -> %s%s%s", name_color, fe->name, COLOR_RESET, target_color, fe->link_target, COLOR_RESET);
+        } else {
             printf("%s%s%s", name_color, fe->name, COLOR_RESET);
+        }
         if (S_ISCHR(fe->mode))
             printf("%s*%s", COLOR_RED, COLOR_RESET);
         else if (S_ISBLK(fe->mode))
