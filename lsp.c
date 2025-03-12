@@ -65,8 +65,15 @@ void human_readable_size(off_t size, char *buf, size_t bufsize) {
     const char *units[] = {"B", "KB", "MB", "GB", "TB"};
     int i = 0;
     double dsize = size;
-    while (dsize >= 1024 && i < 4) { dsize /= 1024; i++; }
-    snprintf(buf, bufsize, "%.1f %s", dsize, units[i]);
+    while (dsize >= 1024 && i < 4) { 
+        dsize /= 1024; 
+        i++; 
+    }
+    if (i == 0) {
+        snprintf(buf, bufsize, "%lld %s", (long long)size, units[i]);
+    } else {
+        snprintf(buf, bufsize, "%.1f %s", dsize, units[i]);
+    }
 }
 
 void get_permission_string(mode_t mode, char *str) {
