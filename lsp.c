@@ -119,14 +119,15 @@ int cmp_entries(const void *a, const void *b) {
     int result = 0;
     if (opt_sort_by_name) {
         result = strcmp(fa->name, fb->name);
-    } else if (!fa->is_dir && opt_sort_by_size) {
+    } else if (opt_sort_by_size) {
         if (fa->size < fb->size)
             result = 1;
         else if (fa->size > fb->size)
             result = -1;
         else
             result = 0;
-    } else {
+    }
+     else {
         if (fa->mtime < fb->mtime)
             result = 1;
         else if (fa->mtime > fb->mtime)
