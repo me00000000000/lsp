@@ -48,6 +48,10 @@ typedef struct {
     char time_str[BUF_SIZE];
 } FileEntry;
 
+int opt_sort_by_size = 0;
+int opt_sort_by_name = 0;
+int opt_reverse_sort = 0;
+
 void human_readable_size(off_t size, char *buf, size_t bufsize) {
     const char *units[] = {"B", "KB", "MB", "GB", "TB"};
     int i = 0;
@@ -108,13 +112,32 @@ void get_permission_string(mode_t mode, char *str) {
 int cmp_entries(const void *a, const void *b) {
     FileEntry *fa = *(FileEntry **)a;
     FileEntry *fb = *(FileEntry **)b;
+
     if (fa->is_dir != fb->is_dir)
         return fb->is_dir - fa->is_dir;
-    if (fa->mtime < fb->mtime)
-        return 1;
-    else if (fa->mtime > fb->mtime)
-        return -1;
-    return 0;
+
+    int result = 0;
+    if (opt_sort_by_name) {
+        result = strcmp(fa->name, fb->name);
+    } else if (!fa->is_dir && opt_sort_by_size) {
+        if (fa->size < fb->size)
+            result = 1;
+        else if (fa->size > fb->size)
+            result = -1;
+        else
+            result = 0;
+    } else {
+        if (fa->mtime < fb->mtime)
+            result = 1;
+        else if (fa->mtime > fb->mtime)
+            result = -1;
+        else
+            result = 0;
+    }
+
+    if (opt_reverse_sort)
+        result = -result;
+    return result;
 }
 
 off_t get_directory_size(const char *path) {
@@ -616,7 +639,7 @@ void process_directory(const char *dirpath, int show_hidden, int print_header, i
             tta->result = &entries[count];
             tta->now = now;
             thread_pool_add_task(pool, process_entry_task, tta);
-            count++;  // <-- Increment count here so that each task reserves a slot.
+            count++;
         } else {
             char full[PATH_MAX];
             snprintf(full, PATH_MAX, "%s/%s", dirpath, namelist[i]->d_name);
@@ -673,6 +696,12 @@ int main(int argc, char *argv[]) {
                     show_hidden = 1;
                 else if (argv[i][j] == 'i')
                     show_inode = 1;
+                else if (argv[i][j] == 's')
+                    opt_sort_by_size = 1;
+                else if (argv[i][j] == 'n')
+                    opt_sort_by_name = 1;
+                else if (argv[i][j] == 'r')
+                    opt_reverse_sort = 1;
                 else {
                     fprintf(stderr, "Unknown flag: -%c\n", argv[i][j]);
                     return EXIT_FAILURE;
