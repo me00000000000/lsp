@@ -11,6 +11,8 @@
 #include <limits.h>
 #include <unistd.h>
 #include <glob.h>
+#include <fcntl.h>
+#include <pthread.h>
 
 #define COLOR_RESET "\033[0m"
 #define COLOR_GREEN "\033[1;32m"
@@ -23,6 +25,9 @@
 #define COLOR_SYMLINK "\033[1;36m"
 #define COLOR_YELLOW "\033[1;33m"
 #define COLOR_LINKTARGET "\033[37m"
+
+#define BUF_SIZE 32
+#define THREAD_THRESHOLD 10
 
 typedef struct {
     char *name;
@@ -42,13 +47,14 @@ typedef struct {
 off_t get_directory_size(const char *path) {
     off_t total = 0;
     DIR *d = opendir(path);
-    if (!d) return 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+    if (!d)
+        return 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
             continue;
         char full[PATH_MAX];
-        snprintf(full, PATH_MAX, "%s/%s", path, e->d_name);
+        snprintf(full, PATH_MAX, "%s/%s", path, entry->d_name);
         struct stat st;
         if (stat(full, &st) == 0) {
             if (S_ISDIR(st.st_mode))
@@ -65,15 +71,14 @@ void human_readable_size(off_t size, char *buf, size_t bufsize) {
     const char *units[] = {"B", "KB", "MB", "GB", "TB"};
     int i = 0;
     double dsize = size;
-    while (dsize >= 1024 && i < 4) { 
-        dsize /= 1024; 
-        i++; 
+    while (dsize >= 1024 && i < 4) {
+        dsize /= 1024;
+        i++;
     }
-    if (i == 0) {
+    if (i == 0)
         snprintf(buf, bufsize, "%lld %s", (long long)size, units[i]);
-    } else {
+    else
         snprintf(buf, bufsize, "%.1f %s", dsize, units[i]);
-    }
 }
 
 void get_permission_string(mode_t mode, char *str) {
@@ -115,8 +120,7 @@ int cmp_entries(const void *a, const void *b) {
     return 0;
 }
 
-void time_ago(time_t mtime, char *buf, size_t bufsize) {
-    time_t now = time(NULL);
+void time_ago(time_t mtime, time_t now, char *buf, size_t bufsize) {
     double seconds = difftime(now, mtime);
     if (seconds < 60)
         snprintf(buf, bufsize, "%.0fs ago", seconds);
@@ -135,37 +139,46 @@ void time_ago(time_t mtime, char *buf, size_t bufsize) {
 void print_entries(FileEntry **entries, size_t count, int show_inode) {
     int max_perm = 0, max_user = 0, max_size = 0, max_date = 0, max_inode = 0, max_nlink = 0;
     size_t max_name = 0;
-    char buf[32];
+    char size_buf[BUF_SIZE], time_buf[BUF_SIZE];
+    time_t now = time(NULL);
     for (size_t i = 0; i < count; i++) {
         FileEntry *fe = entries[i];
         char perms[11];
         get_permission_string(fe->mode, perms);
-        int l = strlen(perms);
-        if (l > max_perm) max_perm = l;
+        int len = strlen(perms);
+        if (len > max_perm)
+            max_perm = len;
         struct passwd *pwd = getpwuid(fe->uid);
         struct group *grp = getgrgid(fe->gid);
         char usergroup[64];
         snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", grp ? grp->gr_name : "unknown");
-        l = strlen(usergroup);
-        if (l > max_user) max_user = l;
-        human_readable_size(fe->size, buf, sizeof(buf));
-        l = strlen(buf);
-        if (l > max_size) max_size = l;
-        char time_str[32];
-        time_ago(fe->mtime, time_str, sizeof(time_str));
-        l = strlen(time_str);
-        if (l > max_date) max_date = l;
-        l = strlen(fe->name);
-        if (l > max_name) max_name = l;
+        len = strlen(usergroup);
+        if (len > max_user)
+            max_user = len;
+        human_readable_size(fe->size, size_buf, sizeof(size_buf));
+        len = strlen(size_buf);
+        if (len > max_size)
+            max_size = len;
+        time_ago(fe->mtime, now, time_buf, sizeof(time_buf));
+        len = strlen(time_buf);
+        if (len > max_date)
+            max_date = len;
+        len = strlen(fe->name);
+        if (len > max_name)
+            max_name = len;
         if (show_inode) {
-            snprintf(buf, sizeof(buf), "%lu", (unsigned long)fe->inode);
-            l = strlen(buf);
-            if (l > max_inode) max_inode = l;
-            snprintf(buf, sizeof(buf), "%lu", (unsigned long)fe->nlink);
-            l = strlen(buf);
-            if (l > max_nlink) max_nlink = l;
+            char inode_str[BUF_SIZE];
+            snprintf(inode_str, sizeof(inode_str), "%lu", (unsigned long)fe->inode);
+            len = strlen(inode_str);
+            if (len > max_inode)
+                max_inode = len;
+            snprintf(inode_str, sizeof(inode_str), "%lu", (unsigned long)fe->nlink);
+            len = strlen(inode_str);
+            if (len > max_nlink)
+                max_nlink = len;
         }
     }
+    char line[1024];
     for (size_t i = 0; i < count; i++) {
         FileEntry *fe = entries[i];
         char perms[11];
@@ -174,18 +187,16 @@ void print_entries(FileEntry **entries, size_t count, int show_inode) {
         struct group *grp = getgrgid(fe->gid);
         char usergroup[64];
         snprintf(usergroup, sizeof(usergroup), "%s:%s", pwd ? pwd->pw_name : "unknown", grp ? grp->gr_name : "unknown");
-        char size_str[32];
-        human_readable_size(fe->size, size_str, sizeof(size_str));
+        human_readable_size(fe->size, size_buf, sizeof(size_buf));
         const char *size_color = "";
-        if (strstr(size_str, "KB") != NULL)
+        if (strstr(size_buf, "KB"))
             size_color = COLOR_GREEN;
-        else if (strstr(size_str, "MB") != NULL)
+        else if (strstr(size_buf, "MB"))
             size_color = COLOR_ORANGE;
-        else if (strstr(size_str, "GB") != NULL)
+        else if (strstr(size_buf, "GB"))
             size_color = COLOR_RED;
-        char time_str[32];
-        time_ago(fe->mtime, time_str, sizeof(time_str));
-        double seconds = difftime(time(NULL), fe->mtime);
+        time_ago(fe->mtime, now, time_buf, sizeof(time_buf));
+        double seconds = difftime(now, fe->mtime);
         const char *date_color = "";
         if (seconds >= 31536000)
             date_color = COLOR_DARK_GREY;
@@ -200,18 +211,19 @@ void print_entries(FileEntry **entries, size_t count, int show_inode) {
             name_color = COLOR_GREEN;
         else
             name_color = COLOR_FILE;
+        int pos = 0;
         if (show_inode) {
-            char inode_str[32];
-            snprintf(inode_str, sizeof(inode_str), "%lu", (unsigned long)fe->inode);
-            printf("%-*s  ", max_inode, inode_str);
-            snprintf(inode_str, sizeof(inode_str), "%lu", (unsigned long)fe->nlink);
-            printf("%-*s  ", max_nlink, inode_str);
+            char inode_str[BUF_SIZE];
+            snprintf(inode_str, sizeof(inode_str), "%-*lu", max_inode, (unsigned long)fe->inode);
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s  ", inode_str);
+            snprintf(inode_str, sizeof(inode_str), "%-*lu", max_nlink, (unsigned long)fe->nlink);
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s  ", inode_str);
         }
-        printf("%-*s  %-*s  %s%-*s%s  %s%-*s%s  ", 
-               max_perm, perms,
-               max_user, usergroup,
-               size_color, max_size, size_str, COLOR_RESET,
-               date_color, max_date, time_str, COLOR_RESET);
+        pos += snprintf(line+pos, sizeof(line)-pos, "%-*s  %-*s  %s%-*s%s  %s%-*s%s  ",
+                        max_perm, perms,
+                        max_user, usergroup,
+                        size_color, max_size, size_buf, COLOR_RESET,
+                        date_color, max_date, time_buf, COLOR_RESET);
         if (fe->is_symlink && fe->link_target) {
             struct stat st_target;
             int stat_ret = stat(fe->fullpath, &st_target);
@@ -220,149 +232,211 @@ void print_entries(FileEntry **entries, size_t count, int show_inode) {
             if (stat_ret == 0) {
                 if (S_ISDIR(st_target.st_mode))
                     target_color = COLOR_DIR;
-                else if (S_ISCHR(st_target.st_mode)) {
-                    target_color = COLOR_LINKTARGET;
+                else if (S_ISCHR(st_target.st_mode))
                     is_char = 1;
-                } else if (S_ISBLK(st_target.st_mode)) {
-                    target_color = COLOR_LINKTARGET;
+                else if (S_ISBLK(st_target.st_mode))
                     is_block = 1;
-                }
             }
-            printf("%s%s%s -> %s%s%s", 
-                   name_color, fe->name, COLOR_RESET,
-                   target_color, fe->link_target, COLOR_RESET);
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s%s%s -> %s%s%s", name_color, fe->name, COLOR_RESET, target_color, fe->link_target, COLOR_RESET);
             if (is_char)
-                printf("%s*%s", COLOR_RED, COLOR_RESET);
+                pos += snprintf(line+pos, sizeof(line)-pos, "%s*%s", COLOR_RED, COLOR_RESET);
             else if (is_block)
-                printf("%s#%s", COLOR_YELLOW, COLOR_RESET);
+                pos += snprintf(line+pos, sizeof(line)-pos, "%s#%s", COLOR_YELLOW, COLOR_RESET);
         } else {
-            printf("%s%s%s", name_color, fe->name, COLOR_RESET);
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s%s%s", name_color, fe->name, COLOR_RESET);
         }
         if (S_ISCHR(fe->mode))
-            printf("%s*%s", COLOR_RED, COLOR_RESET);
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s*%s", COLOR_RED, COLOR_RESET);
         else if (S_ISBLK(fe->mode))
-            printf("%s#%s", COLOR_YELLOW, COLOR_RESET);
-        printf("\n");
+            pos += snprintf(line+pos, sizeof(line)-pos, "%s#%s", COLOR_YELLOW, COLOR_RESET);
+        puts(line);
     }
 }
 
-void process_directory(const char *dirpath, int show_hidden, int print_header, int show_inode) {
-    DIR *d = opendir(dirpath);
-    if (!d) return;
-    if (print_header)
-        printf("%s:\n", dirpath);
-    size_t cap = 16, count = 0;
-    FileEntry **entries = malloc(cap * sizeof(FileEntry *));
-    if (!entries) { 
-        closedir(d); 
-        return; 
-    }
-    struct dirent *dp;
-    while ((dp = readdir(d)) != NULL) {
-        if (!show_hidden && dp->d_name[0] == '.')
-            continue;
-        FileEntry *fe = malloc(sizeof(FileEntry));
-        if (!fe) continue;
-        fe->name = strdup(dp->d_name);
-        snprintf(fe->fullpath, PATH_MAX, "%s/%s", dirpath, dp->d_name);
-        struct stat st;
-        if (lstat(fe->fullpath, &st) < 0) {
-            free(fe->name);
-            free(fe);
-            continue;
-        }
-        fe->mode = st.st_mode;
-        fe->uid = st.st_uid;
-        fe->gid = st.st_gid;
-        fe->mtime = st.st_mtime;
-        fe->inode = st.st_ino;
-        fe->nlink = st.st_nlink;
-        fe->is_dir = S_ISDIR(st.st_mode);
-        if (S_ISLNK(st.st_mode)) {
-            fe->is_symlink = 1;
-            char target[PATH_MAX];
-            ssize_t len = readlink(fe->fullpath, target, sizeof(target) - 1);
-            if (len != -1) {
-                target[len] = '\0';
-                fe->link_target = strdup(target);
-            } else {
-                fe->link_target = strdup("unreadable");
-            }
-            fe->size = st.st_size;
-        } else {
-            fe->is_symlink = 0;
-            fe->link_target = NULL;
-            fe->size = fe->is_dir ? get_directory_size(fe->fullpath) : st.st_size;
-        }
-        if (count >= cap) {
-            cap *= 2;
-            FileEntry **tmp = realloc(entries, cap * sizeof(FileEntry *));
-            if (!tmp) { free(fe->name); free(fe); break; }
-            entries = tmp;
-        }
-        entries[count++] = fe;
-    }
-    closedir(d);
-    qsort(entries, count, sizeof(FileEntry *), cmp_entries);
-    print_entries(entries, count, show_inode);
-    if (print_header)
-        printf("\n");
-    for (size_t i = 0; i < count; i++) {
-        free(entries[i]->name);
-        if (entries[i]->link_target) free(entries[i]->link_target);
-        free(entries[i]);
-    }
-    free(entries);
-}
+typedef struct {
+    int dirfd;
+    char dirpath[PATH_MAX];
+    struct dirent *dentry;
+    FileEntry **result;
+} ThreadArg;
 
-FileEntry* create_file_entry(const char *filepath) {
+void *process_entry_thread(void *arg) {
+    ThreadArg *ta = arg;
+    char full[PATH_MAX];
+    snprintf(full, PATH_MAX, "%s/%s", ta->dirpath, ta->dentry->d_name);
     struct stat st;
-    if (lstat(filepath, &st) < 0) return NULL;
+    if (fstatat(ta->dirfd, ta->dentry->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0)
+        *ta->result = NULL;
+    else {
+        FileEntry *fe = malloc(sizeof(FileEntry));
+        if (fe) {
+            fe->name = strdup(ta->dentry->d_name);
+            strncpy(fe->fullpath, full, PATH_MAX);
+            fe->mode = st.st_mode;
+            fe->uid = st.st_uid;
+            fe->gid = st.st_gid;
+            fe->mtime = st.st_mtime;
+            fe->inode = st.st_ino;
+            fe->nlink = st.st_nlink;
+            fe->is_dir = S_ISDIR(st.st_mode);
+            if (S_ISLNK(st.st_mode)) {
+                fe->is_symlink = 1;
+                char target[PATH_MAX];
+                ssize_t len = readlink(full, target, sizeof(target) - 1);
+                if (len != -1) {
+                    target[len] = '\0';
+                    fe->link_target = strdup(target);
+                } else
+                    fe->link_target = strdup("unreadable");
+                fe->size = st.st_size;
+            } else {
+                fe->is_symlink = 0;
+                fe->link_target = NULL;
+                fe->size = fe->is_dir ? get_directory_size(full) : st.st_size;
+            }
+            *ta->result = fe;
+        } else
+            *ta->result = NULL;
+    }
+    return NULL;
+}
+
+FileEntry *populate_file_entry(const char *name, const char *fullpath, const struct stat *st) {
     FileEntry *fe = malloc(sizeof(FileEntry));
-    if (!fe) return NULL;
-    fe->name = strdup(filepath);
-    strncpy(fe->fullpath, filepath, PATH_MAX);
-    fe->mode = st.st_mode;
-    fe->uid = st.st_uid;
-    fe->gid = st.st_gid;
-    fe->mtime = st.st_mtime;
-    fe->inode = st.st_ino;
-    fe->nlink = st.st_nlink;
-    fe->is_dir = S_ISDIR(st.st_mode);
-    if (S_ISLNK(st.st_mode)) {
+    if (!fe)
+        return NULL;
+    fe->name = strdup(name);
+    strncpy(fe->fullpath, fullpath, PATH_MAX);
+    fe->mode = st->st_mode;
+    fe->uid = st->st_uid;
+    fe->gid = st->st_gid;
+    fe->mtime = st->st_mtime;
+    fe->inode = st->st_ino;
+    fe->nlink = st->st_nlink;
+    fe->is_dir = S_ISDIR(st->st_mode);
+    if (S_ISLNK(st->st_mode)) {
         fe->is_symlink = 1;
         char target[PATH_MAX];
-        ssize_t len = readlink(fe->fullpath, target, sizeof(target) - 1);
+        ssize_t len = readlink(fullpath, target, sizeof(target) - 1);
         if (len != -1) {
             target[len] = '\0';
             fe->link_target = strdup(target);
-        } else {
+        } else
             fe->link_target = strdup("unreadable");
-        }
-        fe->size = st.st_size;
+        fe->size = st->st_size;
     } else {
         fe->is_symlink = 0;
         fe->link_target = NULL;
-        fe->size = fe->is_dir ? get_directory_size(fe->fullpath) : st.st_size;
+        fe->size = fe->is_dir ? get_directory_size(fullpath) : st->st_size;
     }
     return fe;
 }
 
+FileEntry* create_file_entry(const char *filepath) {
+    struct stat st;
+    if (fstatat(AT_FDCWD, filepath, &st, AT_SYMLINK_NOFOLLOW) < 0)
+        return NULL;
+    return populate_file_entry(filepath, filepath, &st);
+}
+
 void process_file_collect(const char *filepath, FileEntry ***files, size_t *count, size_t *cap) {
     FileEntry *fe = create_file_entry(filepath);
-    if (!fe) return;
+    if (!fe)
+        return;
     if (*count >= *cap) {
         *cap *= 2;
         FileEntry **tmp = realloc(*files, *cap * sizeof(FileEntry *));
-        if (!tmp) { free(fe->name); free(fe); return; }
+        if (!tmp) {
+            free(fe->name);
+            free(fe);
+            return;
+        }
         *files = tmp;
     }
     (*files)[(*count)++] = fe;
 }
 
+void process_directory(const char *dirpath, int show_hidden, int print_header, int show_inode) {
+    struct dirent **namelist;
+    int n = scandir(dirpath, &namelist, NULL, alphasort);
+    if (n < 0)
+        return;
+    if (print_header)
+        printf("%s:\n", dirpath);
+    int dirfd = open(dirpath, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        for (int i = 0; i < n; i++) {
+            if (namelist[i]) free(namelist[i]);
+        }
+        free(namelist);
+        return;
+    }
+    FileEntry **entries = malloc(n * sizeof(FileEntry *));
+    size_t count = 0;
+    pthread_t *threads = NULL;
+    ThreadArg *targs = NULL;
+    int use_threads = (n >= THREAD_THRESHOLD);
+    if (use_threads) {
+        threads = malloc(n * sizeof(pthread_t));
+        targs = malloc(n * sizeof(ThreadArg));
+    }
+    for (int i = 0; i < n; i++) {
+        if (!show_hidden && namelist[i]->d_name[0] == '.') {
+            free(namelist[i]);
+            namelist[i] = NULL;
+            continue;
+        }
+        if (use_threads) {
+            targs[count].dirfd = dirfd;
+            strncpy(targs[count].dirpath, dirpath, PATH_MAX);
+            targs[count].dentry = namelist[i];
+            targs[count].result = &entries[count];
+            pthread_create(&threads[count], NULL, process_entry_thread, &targs[count]);
+        } else {
+            char full[PATH_MAX];
+            snprintf(full, PATH_MAX, "%s/%s", dirpath, namelist[i]->d_name);
+            struct stat st;
+            if (fstatat(dirfd, namelist[i]->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0) {
+                free(namelist[i]);
+                namelist[i] = NULL;
+                continue;
+            }
+            FileEntry *fe = populate_file_entry(namelist[i]->d_name, full, &st);
+            entries[count] = fe;
+        }
+        count++;
+    }
+    if (use_threads) {
+        for (size_t i = 0; i < count; i++)
+            pthread_join(threads[i], NULL);
+        free(threads);
+        free(targs);
+    }
+    for (int i = 0; i < n; i++) {
+        if (namelist[i])
+            free(namelist[i]);
+    }
+    free(namelist);
+    close(dirfd);
+    qsort(entries, count, sizeof(FileEntry *), cmp_entries);
+    print_entries(entries, count, show_inode);
+    if (print_header)
+        printf("\n");
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i]) {
+            free(entries[i]->name);
+            if (entries[i]->link_target)
+                free(entries[i]->link_target);
+            free(entries[i]);
+        }
+    }
+    free(entries);
+}
+
 void process_path(const char *path, int show_hidden, int print_header, FileEntry ***file_files, size_t *file_count, size_t *file_cap, int show_inode) {
     struct stat st;
-    if (lstat(path, &st) < 0) return;
+    if (fstatat(AT_FDCWD, path, &st, AT_SYMLINK_NOFOLLOW) < 0)
+        return;
     if (S_ISDIR(st.st_mode))
         process_directory(path, show_hidden, print_header, show_inode);
     else
@@ -373,7 +447,8 @@ int main(int argc, char *argv[]) {
     int show_hidden = 0, show_inode = 0, nonflag_count = 0;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-' && strlen(argv[i]) > 1) {
-            for (size_t j = 1; j < strlen(argv[i]); j++) {
+            size_t len = strlen(argv[i]);
+            for (size_t j = 1; j < len; j++) {
                 if (argv[i][j] == 'h')
                     show_hidden = 1;
                 else if (argv[i][j] == 'i')
@@ -390,7 +465,8 @@ int main(int argc, char *argv[]) {
     FileEntry **file_files = NULL;
     size_t file_count = 0, file_cap = 16;
     file_files = malloc(file_cap * sizeof(FileEntry *));
-    if (!file_files) return EXIT_FAILURE;
+    if (!file_files)
+        return EXIT_FAILURE;
     if (nonflag_count == 0) {
         process_directory(".", show_hidden, 0, show_inode);
     } else {
@@ -401,10 +477,15 @@ int main(int argc, char *argv[]) {
             glob_t results;
             int ret = glob(argv[i], 0, NULL, &results);
             if (ret != 0) {
-                process_path(argv[i], show_hidden, print_header, &file_files, &file_count, &file_cap, show_inode);
+                process_directory(argv[i], show_hidden, print_header, show_inode);
+                process_file_collect(argv[i], &file_files, &file_count, &file_cap);
             } else {
                 for (size_t j = 0; j < results.gl_pathc; j++) {
-                    process_path(results.gl_pathv[j], show_hidden, print_header, &file_files, &file_count, &file_cap, show_inode);
+                    struct stat st;
+                    if (fstatat(AT_FDCWD, results.gl_pathv[j], &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode))
+                        process_directory(results.gl_pathv[j], show_hidden, print_header, show_inode);
+                    else
+                        process_file_collect(results.gl_pathv[j], &file_files, &file_count, &file_cap);
                 }
             }
             globfree(&results);
@@ -414,7 +495,8 @@ int main(int argc, char *argv[]) {
             print_entries(file_files, file_count, show_inode);
             for (size_t i = 0; i < file_count; i++) {
                 free(file_files[i]->name);
-                if (file_files[i]->link_target) free(file_files[i]->link_target);
+                if (file_files[i]->link_target)
+                    free(file_files[i]->link_target);
                 free(file_files[i]);
             }
             free(file_files);
